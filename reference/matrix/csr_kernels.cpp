@@ -115,6 +115,40 @@ GKO_INSTANTIATE_FOR_EACH_VALUE_AND_INDEX_TYPE(
     GKO_DECLARE_CSR_ADVANCED_SPMV_KERNEL);
 
 
+template <typename ValueType, typename IndexType>
+void sptrsv_L_solve(std::shared_ptr<const ReferenceExecutor> exec,
+                    const matrix::Csr<ValueType, IndexType> *a,
+                    const matrix::Dense<ValueType> *b, matrix::Dense<ValueType> *c)
+{
+    auto row_ptrs = a->get_const_row_ptrs();
+    auto col_idxs = a->get_const_col_idxs();
+    auto vals = a->get_const_values();
+
+    for (size_type row = 0; row < a->get_size()[0]; ++row) {
+        for (size_type j = 0; j < c->get_size()[1]; ++j) {
+        //     c->at(row, j) = zero<ValueType>();
+            c->at(row, j) = b->at(row, j);
+        }
+
+        for (size_type k = row_ptrs[row];
+             k < static_cast<size_type>(row_ptrs[row + 1]-1); ++k) {
+            auto val = vals[k];
+            auto col = col_idxs[k];
+            for (size_type j = 0; j < c->get_size()[1]; ++j) {
+                c->at(row, j) -= val * c->at(col, j);
+            }
+        }
+
+        for (size_type j = 0; j < c->get_size()[1]; ++j) {
+        //     c->at(row, j) = zero<ValueType>();
+            c->at(row, j) /= vals[row_ptrs[row + 1]-1];
+        }
+
+    }
+}
+
+
+
 template <typename IndexType>
 void convert_row_ptrs_to_idxs(std::shared_ptr<const ReferenceExecutor> exec,
                               const IndexType *ptrs, size_type num_rows,

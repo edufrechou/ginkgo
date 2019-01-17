@@ -44,11 +44,20 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 namespace gko {
 namespace kernels {
 
-
 #define GKO_DECLARE_CSR_SPMV_KERNEL(ValueType, IndexType)  \
     void spmv(std::shared_ptr<const DefaultExecutor> exec, \
               const matrix::Csr<ValueType, IndexType> *a,  \
               const matrix::Dense<ValueType> *b, matrix::Dense<ValueType> *c)
+
+#define GKO_DECLARE_CSR_SPTRSV_L_SOLVE_KERNEL(ValueType, IndexType)  \
+    void spmv(std::shared_ptr<const DefaultExecutor> exec, \
+              const matrix::Csr<ValueType, IndexType> *a,  \
+              const matrix::Dense<ValueType> *b, matrix::Dense<ValueType> *x)
+
+#define GKO_DECLARE_CSR_SPTRSV_U_SOLVE_KERNEL(ValueType, IndexType)  \
+    void spmv(std::shared_ptr<const DefaultExecutor> exec, \
+              const matrix::Csr<ValueType, IndexType> *a,  \
+              const matrix::Dense<ValueType> *b, matrix::Dense<ValueType> *x)
 
 #define GKO_DECLARE_CSR_ADVANCED_SPMV_KERNEL(ValueType, IndexType)  \
     void advanced_spmv(std::shared_ptr<const DefaultExecutor> exec, \
@@ -86,6 +95,10 @@ namespace kernels {
 #define DECLARE_ALL_AS_TEMPLATES                                   \
     template <typename ValueType, typename IndexType>              \
     GKO_DECLARE_CSR_SPMV_KERNEL(ValueType, IndexType);             \
+    template <typename ValueType, typename IndexType>              \
+    GKO_DECLARE_CSR_SPTRSV_L_SOLVE_KERNEL(ValueType, IndexType);   \
+    template <typename ValueType, typename IndexType>              \
+    GKO_DECLARE_CSR_SPTRSV_U_SOLVE_KERNEL(ValueType, IndexType);   \
     template <typename ValueType, typename IndexType>              \
     GKO_DECLARE_CSR_ADVANCED_SPMV_KERNEL(ValueType, IndexType);    \
     template <typename IndexType>                                  \

@@ -51,8 +51,9 @@ namespace matrix {
 
 namespace csr {
 
-
 GKO_REGISTER_OPERATION(spmv, csr::spmv);
+GKO_REGISTER_OPERATION(sptrsv_L_solve, csr::sptrsv_L_solve);
+GKO_REGISTER_OPERATION(sptrsv_U_solve, csr::sptrsv_U_solve);
 GKO_REGISTER_OPERATION(advanced_spmv, csr::advanced_spmv);
 GKO_REGISTER_OPERATION(convert_row_ptrs_to_idxs, csr::convert_row_ptrs_to_idxs);
 GKO_REGISTER_OPERATION(convert_to_dense, csr::convert_to_dense);

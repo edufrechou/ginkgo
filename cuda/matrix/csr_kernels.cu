@@ -432,6 +432,235 @@ __global__ __launch_bounds__(64) void classical_spmv(
 
 }  // namespace
 
+namespace {
+
+template <typename ValueType, typename IndexType>
+__global__ __launch_bounds__(spmv_block_size) void sptrsv_L_solve_simple_kernel(   
+    const size_type num_rows, 
+    const ValueType* __restrict__ val, 
+    const IndexType* __restrict__ col_idx, 
+    const IndexType* __restrict__ row_ptr, 
+    const ValueType* __restrict__ b,
+    const size_type b_stride, 
+    ValueType* x, 
+    const size_type x_stride
+    ) {
+
+    // b_stride and x_stride do nothing for now...
+
+    extern volatile __shared__ ValueType s_x[];       
+
+    size_type WARP_PER_BLOCK = blockDim.x/32;
+
+    // ValueType * s_x  = (ValueType*) &s_mem[0];
+
+    IndexType wrp = (threadIdx.x + blockIdx.x * blockDim.x) / wsize;
+    IndexType local_warp_id = threadIdx.x / wsize;
+
+    IndexType lne = threadIdx.x & 0x1f;                   // identifica el hilo dentro el warp
+
+    if(wrp >= num_rows) return;
+    
+    IndexType row = row_ptr[wrp];
+    IndexType start_row = blockIdx.x*WARP_PER_BLOCK;
+    IndexType nxt_row = row_ptr[wrp+1];
+
+    IndexType my_level = 0;
+
+    ValueType left_sum = 0;
+    ValueType piv = 1 / val[nxt_row-1];
+ 
+    if(lne==0){
+        left_sum = b[wrp];
+        s_x[local_warp_id] = __longlong_as_double ( 0xFFFFFFFFFFFFFFFF );
+    }
+
+    __syncthreads();
+
+    IndexType off = row+lne;
+    IndexType colidx = col_idx[off];
+
+    ValueType my_val = val[off];
+    ValueType xx;
+
+    int ready = 0;
+
+    while(off < nxt_row - 1)
+    {
+
+        if(!ready)
+        {
+            if(colidx > start_row) 
+                xx = s_x[colidx-start_row];
+            else 
+                xx = x[colidx];
+
+            ready = __double2hiint ( xx ) != (int) 0xFFFFFFFF;
+        } 
+
+        if( __all(ready) ){
+
+            left_sum -= my_val * xx;
+            off+=wsize;
+            colidx = col_idx[off];
+            my_val = val[off];
+
+            ready=0;
+        }
+    }
+    
+    // Reduccion
+    for (int i=16; i>=1; i/=2){
+        left_sum += __shfl_down(left_sum, i);
+    }
+     
+    if(lne==0){
+
+        //escribo en el resultado
+        s_x[local_warp_id] = left_sum * piv;
+        x[wrp] = left_sum * piv;
+    }
+}
+
+template <typename ValueType, typename IndexType>
+__global__ __launch_bounds__(spmv_block_size) void sptrsv_U_solve_simple_kernel(   
+    const size_type num_rows, 
+    const ValueType* __restrict__ val, 
+    const IndexType* __restrict__ col_idx, 
+    const IndexType* __restrict__ row_ptr, 
+    const ValueType* __restrict__ b,
+    const size_type b_stride, 
+    ValueType* x, 
+    const size_type x_stride
+    ) {
+
+    // b_stride and x_stride do nothing for now...
+
+    extern volatile __shared__ ValueType s_x[];       
+
+    // ValueType * s_x  = (ValueType*) &s_mem[0];
+
+    size_type WARP_PER_BLOCK = blockDim.x/32;
+
+    IndexType wrp = num_rows - (threadIdx.x + blockIdx.x * blockDim.x) / wsize - 1;
+    IndexType local_warp_id = threadIdx.x / wsize;
+
+    IndexType lne = threadIdx.x & 0x1f;                   
+
+    if(wrp >= num_rows) return;
+    
+    IndexType row = row_ptr[wrp-1];
+    IndexType start_row = num_rows-blockIdx.x*WARP_PER_BLOCK-1; //check for off-by-one error...
+    IndexType nxt_row = row_ptr[wrp];
+
+    IndexType my_level = 0;
+
+    ValueType left_sum = 0;
+    ValueType piv = 1 / val[row];
+ 
+    if(lne==0){
+        left_sum = b[wrp];
+        s_x[local_warp_id] = __longlong_as_double ( 0xFFFFFFFFFFFFFFFF );
+    }
+
+    __syncthreads();
+
+    IndexType off = row+lne+1;
+    IndexType colidx = col_idx[off];
+
+    ValueType my_val = val[off];
+    ValueType xx;
+
+    int ready = 0;
+
+    while(off < nxt_row)
+    {
+
+        if(!ready)
+        {
+            if(colidx > start_row) 
+                xx = s_x[colidx-start_row];
+            else 
+                xx = x[colidx];
+
+            ready = __double2hiint ( xx ) != (int) 0xFFFFFFFF;
+        } 
+
+        if( __all(ready) ){
+
+            left_sum -= my_val * xx;
+            off+=wsize;
+            colidx = col_idx[off];
+            my_val = val[off];
+
+            ready=0;
+        }
+    }
+    
+    // Reduccion
+    for (int i=16; i>=1; i/=2){
+        left_sum += __shfl_down(left_sum, i);
+    }
+     
+    if(lne==0){
+
+        //escribo en el resultado
+        s_x[local_warp_id] = left_sum * piv;
+        x[wrp] = left_sum * piv;
+    }
+}
+} //namespace
+
+
+template <typename ValueType, typename IndexType>
+void sptrsv_L_solve_simple (
+    std::shared_ptr<const CudaExecutor> exec,
+    const matrix::Csr<ValueType, IndexType> *a,
+    const matrix::Dense<ValueType> *b, matrix::Dense<ValueType> *x )
+{
+
+        ASSERT_NO_CUDA_ERRORS(
+        cudaMemset(x->get_values(), 0xFF, x->get_num_stored_elements() * sizeof(ValueType))
+        );
+
+
+        sptrsv_L_solve_simple_kernel<<<ceildiv(a->get_size()[0] * 32, classical_block_size),
+                                       classical_block_size,
+                                       classical_block_size / 32 * sizeof(ValueType)
+                                    >>>(
+                                    a->get_size()[0], as_cuda_type(a->get_const_values()),
+                                    a->get_const_col_idxs(), as_cuda_type(a->get_const_row_ptrs()),
+                                    as_cuda_type(b->get_const_values()), b->get_stride(),
+                                    as_cuda_type(x->get_values()), x->get_stride());
+
+}
+GKO_INSTANTIATE_FOR_EACH_VALUE_AND_INDEX_TYPE(GKO_DECLARE_CSR_SPTRSV_L_SOLVE_KERNEL);
+
+
+template <typename ValueType, typename IndexType>
+void sptrsv_U_solve_simple (
+    std::shared_ptr<const CudaExecutor> exec,
+    const matrix::Csr<ValueType, IndexType> *a,
+    const matrix::Dense<ValueType> *b, matrix::Dense<ValueType> *x )
+{
+
+        ASSERT_NO_CUDA_ERRORS(
+        cudaMemset(x->get_values(), 0xFF, x->get_num_stored_elements() * sizeof(ValueType))
+        );
+
+
+        sptrsv_U_solve_simple_kernel<<<ceildiv(a->get_size()[0] * 32, classical_block_size),
+                                       classical_block_size,
+                                       classical_block_size / 32 * sizeof(ValueType)
+                                    >>>(
+                                    a->get_size()[0], as_cuda_type(a->get_const_values()),
+                                    a->get_const_col_idxs(), as_cuda_type(a->get_const_row_ptrs()),
+                                    as_cuda_type(b->get_const_values()), b->get_stride(),
+                                    as_cuda_type(x->get_values()), x->get_stride());
+
+}
+GKO_INSTANTIATE_FOR_EACH_VALUE_AND_INDEX_TYPE(GKO_DECLARE_CSR_SPTRSV_U_SOLVE_KERNEL);
+
 
 template <typename ValueType, typename IndexType>
 void spmv(std::shared_ptr<const CudaExecutor> exec,
